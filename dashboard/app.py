@@ -1,6 +1,7 @@
 import json
 import os
 import time
+import uuid
 from datetime import datetime
 from collections import defaultdict
 
@@ -23,8 +24,8 @@ KAFKA_CONFIG = {
     "sasl.mechanisms": "PLAIN",
     "sasl.username": os.getenv("CONFLUENT_API_KEY", ""),
     "sasl.password": os.getenv("CONFLUENT_API_SECRET", ""),
-    "group.id": "demo-dashboard",
-    "auto.offset.reset": "latest",
+    "group.id": f"demo-dashboard-{uuid.uuid4().hex[:8]}",
+    "auto.offset.reset": "earliest",
 }
 
 SENSOR_TOPIC = "sensor-readings"
@@ -284,7 +285,7 @@ with st.sidebar:
     st.subheader("Inject Anomaly")
     target_machine = st.selectbox("Machine", MACHINES)
     target_sensor = st.selectbox("Sensor", SENSORS)
-    intensity = st.slider("Intensity", 1.0, 5.0, 3.0, 0.5)
+    intensity = st.slider("Intensity", 1.0, 20.0, 10.0, 1.0)
 
     col1, col2 = st.columns(2)
     with col1:
