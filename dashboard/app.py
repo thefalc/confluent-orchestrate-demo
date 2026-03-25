@@ -71,10 +71,14 @@ def poll_messages(max_messages=50):
                 st.error(f"Kafka error: {msg.error()}")
             continue
         try:
-            value = json.loads(msg.value().decode("utf-8"))
+            raw = msg.value()
+            # JSON Schema Registry messages have a 5-byte header (magic byte + schema ID)
+            if raw[:1] == b'\x00':
+                raw = raw[5:]
+            value = json.loads(raw.decode("utf-8"))
             value["_topic"] = msg.topic()
             messages.append(value)
-        except json.JSONDecodeError:
+        except (json.JSONDecodeError, UnicodeDecodeError):
             continue
     return messages
 
@@ -153,7 +157,7 @@ def simulate_agent_response(alert):
 
 
 # ---------------------------------------------------------------------------
-# UI Layout
+# UI Layout (static parts — rendered once)
 # ---------------------------------------------------------------------------
 st.title("Predictive Maintenance Demo")
 st.caption("Confluent + watsonx Orchestrate")
@@ -180,8 +184,6 @@ with st.sidebar:
     st.subheader("Pipeline Status")
     st.metric("Readings processed", st.session_state.readings_count)
     st.metric("Anomalies detected", st.session_state.anomaly_count)
-
-    # Check if anomaly is active
     anomaly_active = os.path.exists("/tmp/anomaly_target.json")
     if anomaly_active:
         st.warning("Anomaly injection ACTIVE")
@@ -199,65 +201,62 @@ with col_agent:
     st.subheader("Agent Activity Log")
     agent_log_placeholder = st.empty()
 
+
 # ---------------------------------------------------------------------------
-# Main loop
+# Auto-refreshing fragment — only this section re-runs every 2 seconds
 # ---------------------------------------------------------------------------
-# Poll for messages and update state
-messages = poll_messages()
+@st.fragment(run_every=2)
+def live_data():
+    """Poll Kafka and update the dynamic parts of the dashboard."""
+    messages = poll_messages()
 
-for msg in messages:
-    if msg["_topic"] == SENSOR_TOPIC:
-        st.session_state.readings_count += 1
-        machine = msg.get("machine_id", "unknown")
-        sensor = msg.get("sensor_type", "unknown")
-        key = f"{machine}/{sensor}"
-        data_list = st.session_state.sensor_data[machine][sensor]
-        data_list.append({
-            "time": msg.get("timestamp", datetime.now().isoformat()),
-            "value": msg.get("value", 0),
-        })
-        # Trim to max points
-        if len(data_list) > MAX_POINTS:
-            st.session_state.sensor_data[machine][sensor] = data_list[-MAX_POINTS:]
+    for msg in messages:
+        if msg["_topic"] == SENSOR_TOPIC:
+            st.session_state.readings_count += 1
+            machine = msg.get("machine_id", "unknown")
+            sensor = msg.get("sensor_type", "unknown")
+            data_list = st.session_state.sensor_data[machine][sensor]
+            data_list.append({
+                "time": msg.get("timestamp", datetime.now().isoformat()),
+                "value": msg.get("value", 0),
+            })
+            if len(data_list) > MAX_POINTS:
+                st.session_state.sensor_data[machine][sensor] = data_list[-MAX_POINTS:]
 
-    elif msg["_topic"] == ALERTS_TOPIC:
-        st.session_state.anomaly_count += 1
-        st.session_state.alerts.append(msg)
-        # Simulate agent processing
-        log_entries = simulate_agent_response(msg)
-        st.session_state.agent_log.extend(log_entries)
+        elif msg["_topic"] == ALERTS_TOPIC:
+            st.session_state.anomaly_count += 1
+            st.session_state.alerts.append(msg)
+            log_entries = simulate_agent_response(msg)
+            st.session_state.agent_log.extend(log_entries)
 
-# Render sensor charts
-with chart_placeholder.container():
-    for machine in MACHINES:
-        machine_data = st.session_state.sensor_data.get(machine, {})
-        if not machine_data:
-            continue
+    # Render sensor charts
+    with chart_placeholder.container():
+        for machine in MACHINES:
+            machine_data = st.session_state.sensor_data.get(machine, {})
+            if not machine_data:
+                continue
 
-        has_anomaly = any(
-            a.get("machine_id") == machine
-            for a in st.session_state.alerts[-5:]
-        )
-        status = "!!!" if has_anomaly else "OK"
-        st.markdown(f"**{machine}** {'⚠️' if has_anomaly else '✅'}")
+            has_anomaly = any(
+                a.get("machine_id") == machine
+                for a in st.session_state.alerts[-5:]
+            )
+            st.markdown(f"**{machine}** {'⚠️' if has_anomaly else '✅'}")
 
-        # Show latest values as small metrics
-        cols = st.columns(3)
-        for i, sensor in enumerate(["temperature", "vibration", "pressure"]):
-            readings = machine_data.get(sensor, [])
-            if readings:
-                latest = readings[-1]["value"]
-                unit = {"temperature": "C", "vibration": "mm/s", "pressure": "psi"}[sensor]
-                cols[i].metric(sensor.capitalize(), f"{latest:.1f} {unit}")
+            cols = st.columns(3)
+            for i, sensor in enumerate(["temperature", "vibration", "pressure"]):
+                readings = machine_data.get(sensor, [])
+                if readings:
+                    latest = readings[-1]["value"]
+                    unit = {"temperature": "C", "vibration": "mm/s", "pressure": "psi"}[sensor]
+                    cols[i].metric(sensor.capitalize(), f"{latest:.1f} {unit}")
 
-# Render agent log
-with agent_log_placeholder.container():
-    if st.session_state.agent_log:
-        log_text = "\n".join(st.session_state.agent_log[-30:])
-        st.code(log_text, language=None)
-    else:
-        st.info("Waiting for anomaly alerts...")
+    # Render agent log
+    with agent_log_placeholder.container():
+        if st.session_state.agent_log:
+            log_text = "\n".join(st.session_state.agent_log[-30:])
+            st.code(log_text, language=None)
+        else:
+            st.info("Waiting for anomaly alerts...")
 
-# Auto-refresh
-time.sleep(2)
-st.rerun()
+
+live_data()
