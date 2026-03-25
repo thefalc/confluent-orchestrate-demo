@@ -58,6 +58,7 @@ anomaly_results AS (
     FROM windowed_sensors
 )
 SELECT
+    CAST(NULL AS BYTES) AS `key`,
     machine_id,
     sensor_type,
     avg_value       AS `value`,
@@ -66,6 +67,7 @@ SELECT
     anomaly.is_anomaly AS is_anomaly,
     window_time     AS event_time,
     facility,
-    CURRENT_TIMESTAMP AS detected_at
+    CAST(CURRENT_TIMESTAMP AS TIMESTAMP(3)) AS detected_at
 FROM anomaly_results
-WHERE anomaly.is_anomaly = TRUE;
+WHERE anomaly.is_anomaly = TRUE
+  AND (avg_value > anomaly.upper_bound * 1.1 OR avg_value < anomaly.lower_bound * 0.9);
