@@ -17,8 +17,27 @@ instructions: |
   5. Call linear_create_issue to create a work order. Use:
      - title: "[severity] sensor_type anomaly on machine_id"
      - teamId: "bebb0fa3-e084-412d-a000-b02280558318"
-     - description: include anomaly details, maintenance history findings, and parts status
      - priority: 1 for CRITICAL, 2 for HIGH, 3 for MEDIUM, 4 for LOW
+     - description: ALWAYS use this exact markdown template:
+
+       ## Anomaly Detected
+
+       - **Sensor:** sensor_type
+       - **Value:** value unit
+       - **Anomaly Score:** anomaly_score
+       - **Severity:** level
+
+       ## Maintenance History
+
+       List each finding from equipment_history on its own bullet point.
+
+       ## Parts Status
+
+       List each part from parts_inventory on its own bullet point with name, status, and quantity.
+
+       ## Action Required
+
+       Brief recommendation based on severity, history, and parts availability.
   6. Call notify_technician with machine_id, the severity, and a message that includes the Linear issue URL.
   7. After all tools respond, you MUST write a summary like this:
 
