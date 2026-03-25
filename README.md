@@ -6,23 +6,27 @@ An end-to-end demo that streams IoT sensor data through Confluent Cloud, detects
 
 ```
 Sensor Simulator ──► Kafka (sensor-readings) ──► Flink SQL (ML_DETECT_ANOMALIES)
-                                                          │
-                                                          ▼
-Streamlit Dashboard ◄── Kafka (equipment-alerts) ──► HTTP Sink Connector
-                                                          │
-                                                          ▼
-                                                    ngrok tunnel
-                                                          │
-                                                          ▼
-                                                   Webhook Proxy
-                                                          │
-                                                          ▼
-                                                  Orchestrate Agent
-                                                          │
-                                          ┌───────────────┼───────────────┐
-                                          ▼               ▼               ▼
-                                   Check History    Check Parts     Create Linear
-                                                                   Issue + Notify
+                              │                            │
+                              │                            ▼
+                              │                  Kafka (equipment-alerts)
+                              │                     │              │
+                              ├─────────────────────┘              │
+                              ▼                                    ▼
+                     Streamlit Dashboard                  HTTP Sink Connector
+                                                                   │
+                                                                   ▼
+                                                             ngrok tunnel
+                                                                   │
+                                                                   ▼
+                                                            Webhook Proxy
+                                                                   │
+                                                                   ▼
+                                                           Orchestrate Agent
+                                                                   │
+                                                   ┌───────────────┼───────────────┐
+                                                   ▼               ▼               ▼
+                                            Check History    Check Parts     Create Linear
+                                                                            Issue + Notify
 ```
 
 **Data flow:**
