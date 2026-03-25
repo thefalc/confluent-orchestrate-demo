@@ -1,0 +1,21 @@
+{
+  "name": "linear-mcp",
+  "description": "Linear MCP server for creating and managing work orders",
+  "type": "mcp",
+  "server": {
+    "command": "npx",
+    "args": [
+      "-y",
+      "@anthropic/linear-mcp-server"
+    ],
+    "env": {
+      "LINEAR_API_KEY": "${LINEAR_API_KEY}"
+    }
+  },
+  "tools": [
+    "linear_create_issue",
+    "linear_update_issue",
+    "linear_search_issues",
+    "linear_add_comment"
+  ]
+}

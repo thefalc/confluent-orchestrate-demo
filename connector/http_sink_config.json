@@ -1,0 +1,16 @@
+{
+  "name": "orchestrate-alert-sink",
+  "config": {
+    "connector.class": "HttpSink",
+    "tasks.max": "1",
+    "topics": "equipment-alerts",
+    "http.api.url": "${NGROK_URL}/alert",
+    "request.method": "POST",
+    "headers": "Content-Type: application/json",
+    "request.body.format": "json",
+    "batch.max.size": "1",
+    "value.converter": "org.apache.kafka.connect.json.JsonConverter",
+    "value.converter.schemas.enable": "false",
+    "key.converter": "org.apache.kafka.connect.storage.StringConverter"
+  }
+}
