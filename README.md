@@ -19,7 +19,7 @@ Streamlit Dashboard ◄── Kafka (equipment-alerts) ──► Orchestrate Age
 **Data flow:**
 1. **Simulator** generates synthetic sensor readings (vibration, temperature, pressure) for 4 industrial machines
 2. **Confluent Cloud Kafka** ingests readings into the `sensor-readings` topic
-3. **Flink SQL** runs ARIMA-based anomaly detection over 10-second tumbling windows
+3. **Flink SQL** runs ML-based anomaly detection over 10-second tumbling windows
 4. Detected anomalies are written to the `equipment-alerts` topic
 5. Alerts route to the **watsonx Orchestrate agent**, which:
    - Looks up equipment maintenance history
