@@ -37,7 +37,7 @@ Streamlit Dashboard ◄── Kafka (equipment-alerts) ──► Orchestrate Age
 │   └── anomaly_injector.py     # CLI to inject controlled anomalies
 ├── flink/                      # Flink SQL jobs (run in Confluent Cloud)
 │   ├── 01_sensor_table.sql     # Add event_time column & watermark
-│   ├── 02_anomaly_detection.sql # ARIMA anomaly detection pipeline
+│   ├── 02_anomaly_detection.sql # ML-based anomaly detection pipeline
 │   └── 03_alerts_table.sql     # equipment-alerts sink table
 ├── connector/                  # Alert routing to Orchestrate
 │   ├── http_sink_config.json   # HTTP Sink Connector config
