@@ -8,7 +8,16 @@ An end-to-end demo that streams IoT sensor data through Confluent Cloud, detects
 Sensor Simulator ──► Kafka (sensor-readings) ──► Flink SQL (ML_DETECT_ANOMALIES)
                                                           │
                                                           ▼
-Streamlit Dashboard ◄── Kafka (equipment-alerts) ──► Orchestrate Agent
+Streamlit Dashboard ◄── Kafka (equipment-alerts) ──► HTTP Sink Connector
+                                                          │
+                                                          ▼
+                                                    ngrok tunnel
+                                                          │
+                                                          ▼
+                                                   Webhook Proxy
+                                                          │
+                                                          ▼
+                                                  Orchestrate Agent
                                                           │
                                           ┌───────────────┼───────────────┐
                                           ▼               ▼               ▼
@@ -18,15 +27,17 @@ Streamlit Dashboard ◄── Kafka (equipment-alerts) ──► Orchestrate Age
 
 **Data flow:**
 1. **Simulator** generates synthetic sensor readings (vibration, temperature, pressure) for 4 industrial machines
-2. **Confluent Cloud Kafka** ingests readings into the `sensor-readings` topic
-3. **Flink SQL** runs ML-based anomaly detection over 10-second tumbling windows
+2. **Confluent Cloud Kafka** ingests readings into the `sensor-readings` topic (JSON Schema Registry format)
+3. **Flink SQL** runs `ML_DETECT_ANOMALIES` over 10-second tumbling windows using ARIMA modeling
 4. Detected anomalies are written to the `equipment-alerts` topic
-5. Alerts route to the **watsonx Orchestrate agent**, which:
+5. **HTTP Sink Connector** forwards alerts to a local webhook proxy via an ngrok tunnel
+6. **Webhook proxy** invokes the Orchestrate agent via the Runs API
+7. The **watsonx Orchestrate agent** triages the alert:
    - Looks up equipment maintenance history
    - Checks parts inventory and availability
-   - Creates a Linear issue with appropriate priority
+   - Creates a Linear issue with structured description and priority
    - Notifies the assigned technician
-6. **Streamlit dashboard** provides real-time visualization and anomaly injection controls
+8. **Streamlit dashboard** provides real-time visualization and anomaly injection controls
 
 ## Project Structure
 
@@ -67,12 +78,12 @@ Streamlit Dashboard ◄── Kafka (equipment-alerts) ──► Orchestrate Age
 
 ## Prerequisites
 
-- Python 3.8+
+- Python 3.10+
 - Docker & Docker Compose
 - [Confluent Cloud](https://confluent.cloud/) account with a Kafka cluster
-- IBM watsonx Orchestrate instance (SaaS or local via Docker)
+- [watsonx Orchestrate Developer Edition](https://www.ibm.com/docs/en/watsonx/watson-orchestrate/current) (local Docker install via `orchestrate` CLI)
 - [Linear](https://linear.app/) account with an API key
-- [ngrok](https://ngrok.com/) (optional, for HTTP Sink Connector webhook)
+- [ngrok](https://ngrok.com/) for tunneling HTTP Sink Connector webhooks to localhost
 
 ## Setup
 
@@ -96,16 +107,25 @@ Fill in your credentials:
 | `LINEAR_API_KEY` | Linear API key for work order creation |
 | `SLACK_WEBHOOK_URL` | *(Optional)* Slack webhook for notifications |
 
-For Orchestrate, configure **either** remote SaaS or local:
+For the local Orchestrate webhook proxy, also set:
 
-**Remote (SaaS):** `WXO_API_KEY`, `WXO_INSTANCE_URL`, `WXO_AGENT_ID`
-
-**Local (Docker):** `ORCHESTRATE_LOCAL_URL`, `ORCHESTRATE_AGENT_ID`, `JWT_SECRET`, `DEFAULT_TENANT_ID` (plus `server.env` for the Docker services)
+| Variable | Description |
+|----------|-------------|
+| `ORCHESTRATE_LOCAL_URL` | Orchestrate server URL (default: `http://localhost:4321`) |
+| `ORCHESTRATE_AGENT_ID` | Agent ID from `orchestrate agents list` |
+| `JWT_SECRET` | JWT secret from `server.env` |
+| `DEFAULT_TENANT_ID` | Tenant ID from Orchestrate server |
 
 ### 2. Install Dependencies
 
 ```bash
 pip install -r requirements.txt
+```
+
+You will also need `flask`, `PyJWT`, and `attrs`:
+
+```bash
+pip install flask PyJWT attrs
 ```
 
 ### 3. Create Kafka Topics
@@ -114,61 +134,87 @@ pip install -r requirements.txt
 ./demo/setup_confluent.sh
 ```
 
-Creates `sensor-readings` and `equipment-alerts` topics (4 partitions each).
+Creates `sensor-readings` (4 partitions) and `equipment-alerts` (6 partitions) topics.
 
 ### 4. Deploy Flink SQL Jobs
 
 In the Confluent Cloud Flink SQL workspace, execute in order:
 
-1. `flink/01_sensor_table.sql` -- adds computed columns to sensor-readings
-2. `flink/03_alerts_table.sql` -- creates equipment-alerts sink table
-3. `flink/02_anomaly_detection.sql` -- deploys the anomaly detection pipeline
+1. `flink/01_sensor_table.sql` — adds `event_time` watermarked column to `sensor-readings`
+2. `flink/03_alerts_table.sql` — creates `equipment-alerts` sink table with `json-registry` format
+3. `flink/02_anomaly_detection.sql` — deploys the anomaly detection pipeline
 
-### 5. Start Orchestrate
+> **Note:** The anomaly detection uses `minTrainingSize=30`, so Flink needs ~5 minutes of baseline sensor data before it can start detecting anomalies.
 
-**Option A -- Local Docker:**
+### 5. Start Orchestrate (Developer Edition)
 
 ```bash
-docker-compose up -d
-# Wait for all services to become healthy
-# Access the chat UI at http://localhost:3000/chat-lite
+orchestrate server start --env-file server.env
 ```
 
-Then import the agent and tools:
+Wait for all containers to become healthy, then import the agent and tools:
 
 ```bash
 ./orchestrate/import.sh
-./scripts/patch_containers.sh   # Injects LINEAR_API_KEY into containers
 ```
 
-**Option B -- Remote SaaS:**
+After import, patch the Docker containers to inject `LINEAR_API_KEY` (the orchestrate CLI doesn't automatically map custom env vars into the `tools-runtime` container):
 
-Import via the watsonx Orchestrate UI or API using the specs in `orchestrate/`.
+```bash
+./scripts/patch_containers.sh
+```
+
+> **Important:** You must re-run `patch_containers.sh` each time you restart the Orchestrate server.
+
+The agent ID will be printed during import. Update `ORCHESTRATE_AGENT_ID` in `.env` with this value.
 
 ### 6. Set Up Alert Routing
 
-**Option A -- HTTP Sink Connector (recommended for demos):**
-
-1. Start ngrok: `ngrok http 8090`
-2. Set `NGROK_URL` in `.env`
-3. Deploy the connector using `connector/http_sink_config.json`
-4. Start the webhook proxy: `python connector/webhook_proxy.py`
-
-**Option B -- Kafka Consumer:**
+Start an ngrok tunnel to expose the local webhook proxy:
 
 ```bash
-python connector/alert_consumer.py
+ngrok http 8090
 ```
 
-Subscribes to `equipment-alerts` and invokes the agent via the `orchestrate` CLI.
+Deploy the HTTP Sink Connector in Confluent Cloud using the config in `connector/http_sink_config.json`. Update the `http.api.url` to your ngrok URL:
+
+```json
+{
+  "http.api.url": "https://your-ngrok-id.ngrok.app/alert",
+  "topics": "equipment-alerts",
+  "input.data.format": "JSON_SR",
+  "request.body.format": "json",
+  "batch.max.size": "1"
+}
+```
+
+> **Note:** Use `input.data.format: JSON_SR` (not `JSON`) since the Flink job writes with `json-registry` format.
+
+Start the webhook proxy:
+
+```bash
+python connector/webhook_proxy.py
+```
+
+The proxy listens on port 8090 and forwards alerts to the Orchestrate agent via the Runs API.
 
 ## Running the Demo
 
+### Start the Sensor Producer
+
 ```bash
-./demo/run_demo.sh
+python -m simulator.sensor_producer
 ```
 
-This starts the sensor producer and opens the Streamlit dashboard at **http://localhost:8501**.
+This produces readings for all 4 machines (12 readings per cycle, every 10 seconds).
+
+### Start the Dashboard
+
+```bash
+streamlit run dashboard/app.py --server.port 8501 --browser.gatherUsageStats false
+```
+
+Open **http://localhost:8501** to view the real-time dashboard.
 
 ### Injecting Anomalies
 
@@ -180,27 +226,49 @@ This starts the sensor producer and opens the Streamlit dashboard at **http://lo
 python -m simulator.anomaly_injector compressor-01 vibration --intensity 5.0
 ```
 
-The anomaly ramps up over 60 seconds. Flink detects it and publishes an alert, which triggers the Orchestrate agent to triage and respond.
+The anomaly ramps up over 60 seconds. Flink detects it and publishes an alert to `equipment-alerts`, which the HTTP Sink Connector forwards to the webhook proxy, triggering the Orchestrate agent to triage and respond.
 
-### Resetting
+**What the agent does for each alert:**
+1. Assesses severity (CRITICAL / HIGH / MEDIUM / LOW)
+2. Queries equipment maintenance history
+3. Checks parts inventory and availability
+4. Creates a structured Linear issue with anomaly details, history, parts status, and recommended action
+5. Notifies the assigned technician
+
+### Stopping
 
 ```bash
+# Stop the sensor producer
+pkill -f sensor_producer
+
+# Clear any active anomaly
+rm -f /tmp/anomaly_target.json
+
+# Or use the reset script
 ./demo/reset_demo.sh
 ```
 
-Clears anomaly state and stops background processes.
-
 ## Machines & Sensors
 
-| Machine | Sensors | Facility |
-|---------|---------|----------|
-| compressor-01 | vibration, temperature, pressure | Plant-A |
-| compressor-02 | vibration, temperature, pressure | Plant-A |
-| pump-03 | vibration, temperature, pressure | Plant-B |
-| turbine-04 | vibration, temperature, pressure | Plant-B |
+| Machine | Facility | Criticality |
+|---------|----------|-------------|
+| compressor-01 | plant-north | high |
+| compressor-02 | plant-north | medium |
+| pump-03 | plant-south | high |
+| turbine-04 | plant-south | critical |
 
-Normal ranges: temperature ~72C, vibration ~3.5 mm/s, pressure ~150 psi.
+Normal operating ranges: temperature ~72°C, vibration ~3.5 mm/s, pressure ~150 psi.
+
+## Troubleshooting
+
+**Linear issue creation fails:** Run `./scripts/patch_containers.sh` to inject `LINEAR_API_KEY` into the Orchestrate Docker containers. This is needed after every server restart.
+
+**Connector returns errors:** Verify the ngrok tunnel is running and the URL in the connector config matches. Also ensure `input.data.format` is set to `JSON_SR`.
+
+**Dashboard shows UnicodeDecodeError:** The dashboard strips the 5-byte Schema Registry header from messages. If you see this error, ensure you're running the latest version of `dashboard/app.py`.
+
+**Flink not detecting anomalies:** The ML model needs ~30 data points (~5 minutes at 10-second intervals) of baseline data before it can detect anomalies. Let the sensor producer run for a few minutes first.
 
 ## License
 
-Apache License 2.0 -- see [LICENSE](LICENSE) for details.
+Apache License 2.0 — see [LICENSE](LICENSE) for details.
